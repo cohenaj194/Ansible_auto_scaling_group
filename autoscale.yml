@@ -1,0 +1,137 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_prompt:
+  #user enters the name of the ami image to make an autoscaling group from
+   - name: image
+     prompt: "enter the AMI image id"
+     private: no
+ 
+  #user enters the name that will be used to name everything else in the architecture
+   - name: architecture
+     prompt: "enter the desired name for your infastructure"
+     private: no
+
+  vars:
+   loadb: "{{architecture}}-lb"
+   auto_sc:  "{{architecture}}_asg"
+   lc: "{{architecture}}_lc"
+
+  vars_files:
+    #contains the variables ami_access and ami_secret  
+    - amiKeys.yml
+    #contains the variables keypair, group, subnetID and regi
+    - regionInfo.yml
+
+  tasks:
+   #http://stackoverflow.com/questions/34016583/ansible-ec2-elb-lb-https-to-http-error
+   #load balancer
+   - ec2_elb_lb:
+      aws_access_key: '{{ ami_access }}'
+      aws_secret_key: '{{ ami_secret }}'
+      security_group_ids: '{{group}}'
+      name: "{{loadb}}"
+      region: "{{regi}}"
+      zones:
+       - us-east-1a
+       - us-east-1b
+       - us-east-1c
+       - us-east-1e
+      state: present
+      listeners:
+       - protocol: http
+         load_balancer_port: 80
+         instance_port: 80
+
+   #info on the ec2_lc module
+   #http://docs.ansible.com/ansible/ec2_lc_module.html
+   
+   #ansible 2.0 required for this task, installation directions at
+   #http://stackoverflow.com/questions/34903026/update-ansible-1-9-4-to-ansible-2-0
+   #launch config     
+   - ec2_lc:
+      aws_access_key: '{{ ami_access }}'
+      aws_secret_key: '{{ ami_secret }}'      
+      region:  "{{regi}}"
+      name: '{{lc}}'
+      image_id: '{{ image }}'
+      key_name: "{{ keypair }}"
+      security_groups: '{{ group }}'
+      instance_type: t2.micro
+      volumes:
+       - device_name: /dev/sda1
+         volume_size: 100
+         device_type: io1
+         iops: 3000
+         delete_on_termination: true
+
+   #http://docs.ansible.com/ansible/ec2_asg_module.html
+   #auto scaling group
+   - ec2_asg:
+      aws_access_key: '{{ ami_access }}'
+      aws_secret_key: '{{ ami_secret }}'
+      region:  "{{ regi }}"
+      name: '{{ auto_sc }}'
+      load_balancers: '{{ loadb }}'
+      availability_zones: 'us-east-1a'
+      launch_config_name: '{{ lc }}'
+      min_size: 1
+      max_size: 4
+      desired_capacity: 2
+      vpc_zone_identifier: '{{ subnetID }}'
+      wait_for_instances: true
+
+   #http://docs.ansible.com/ansible/ec2_scaling_policy_module.html  
+   #auto scaling policy 
+   #adds or removes instances
+   - ec2_scaling_policy:
+      aws_access_key: '{{ ami_access }}'
+      aws_secret_key: '{{ ami_secret }}'
+      region: "{{regi}}"
+      state: present
+      name: "{{item.pol_name}}"
+      adjustment_type: "ChangeInCapacity"
+      asg_name: "{{auto_sc}}"
+      scaling_adjustment: "{{item.changes}}"
+      min_adjustment_step: 1
+      cooldown: 300
+     register: policies 
+     with_items:
+      - pol_name: "cpuUP_{{auto_sc}}_policy"
+        changes: +1
+      - pol_name: "cpuDown_{{auto_sc}}_policy"
+        changes: -1
+
+   #http://stackoverflow.com/questions/36612103/ansible-ec2-metric-alarm-will-not-attach-to-auto-scaling-policy/36632370#36632370
+   #http://www.it-recipes.com/articles/blog/206
+   #http://docs.ansible.com/ansible/ec2_metric_alarm_module.html
+   # cloud watch alarms
+   - ec2_metric_alarm:
+      aws_access_key: '{{ ami_access }}'
+      aws_secret_key: '{{ ami_secret }}'
+      state: present
+      region: "{{regi}}"
+      name: "{{item.names}}"
+      metric: "CPUUtilization"
+      namespace: "AWS/EC2"
+      statistic: Average
+      comparison: "{{item.compare}}"
+      threshold: "{{item.limits}}"
+      period: 60
+      evaluation_periods: 1
+      unit: "Percent"
+      description: "{{item.desc}}"
+      dimensions: {'AutoScalingGroupName':'{{auto_sc}}'}
+      alarm_actions: "{{item.pol}}"
+     with_items:
+      - names: "cpuUP_{{auto_sc}}"
+        compare: ">="
+        limits: "20.0"
+        desc: "This will alarm when the average cpu usage of the ASG is greater than 20% for 1 minute"
+        pol: "{{policies.results[0]['arn']}}"
+      - names: "cpuDown_{{auto_sc}}"
+        compare: "<="
+        limits: "10.0"
+        desc: "This will alarm when the average cpu usage of the ASG is less than 10% for 1 minute"
+        pol: "{{policies.results[1]['arn']}}"

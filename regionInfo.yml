@@ -1,0 +1,9 @@
+---
+#your keypair
+keypair: "someKeyPairName"
+#your security group
+group: "sg-asd34f3e"
+#the subnet you want to use, found in the vpc menu
+subnetID: "subnet-adsfa243223"
+#the region of the subnet you are using
+regi: "us-east-1"
