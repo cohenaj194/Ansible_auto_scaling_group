@@ -2,8 +2,8 @@
 #put into ansible vault with
 #ansible-vault encrypt amiKeys.yml
 
-ami_access: "GFGHTDFGHKKDQ"
-ami_secret: "jksdflhKJHDLFHDHisdf//+s"
+ami_access: "GFGHTDFGHKKDQgibberish"
+ami_secret: "jksdflhKJHDLFHDHisdf//+sgibberish"
 
 #after encrypting run the other playbook with 
 #ansible-playbook autoscale.yml --ask-vault-pass
